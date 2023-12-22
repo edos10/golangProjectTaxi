@@ -1,0 +1,42 @@
+version: '3.1'
+services:
+  location_db:
+    image: postgres
+    restart: always
+    ports:
+      - 5432:5432
+    environment:
+      PGUSER: usr
+      POSTGRES_DB: auth
+      POSTGRES_USER: usr
+      POSTGRES_PASSWORD: authpwd
+    healthcheck:
+      test: "pg_isready -d $$POSTGRES_DB -U $$POSTGRES_USER"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - local  
+  
+  prometheus:
+    image: prom/prometheus
+    container_name: prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+    ports:
+      - 9090:9090
+    restart: unless-stopped
+    volumes:
+      - ./prometheus:/etc/prometheus   
+    networks:
+      - local
+  
+  build:
+    image: build:develop
+    build:
+      context: "."
+      dockerfile: ".docker/build.Dockerfile"
+
+networks:
+  local:
+    driver: bridge
