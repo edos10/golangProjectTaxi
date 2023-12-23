@@ -1,1 +1,4 @@
 .idea
+.log
+./test_send
+./driver_service/data
