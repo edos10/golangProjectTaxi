@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"driver_service/internal/constants"
 	"driver_service/internal/model"
 	"log"
 
@@ -14,7 +15,10 @@ type TripRepository interface {
 	GetTrips() ([]model.Trip, error)
 	GetTripByID(tripID string) (*model.Trip, error)
 	ChangeTripStatusById(tripId string, state string) error
+	AcceptTripById(tripID string, userID string) error
 	GetTripsByStatus(status string) ([]model.Trip, error)
+	CheckFreeTrip(tripID string) bool
+	CheckHaveTripByUser(tripID string, userID string) (bool, error)
 }
 
 type tripRepository struct {
@@ -105,4 +109,28 @@ func (r *tripRepository) GetTripsByStatus(status string) ([]model.Trip, error) {
 
 	return trips, nil
 
+}
+
+func (r *tripRepository) CheckFreeTrip(tripID string) bool {
+	trip, _ := r.GetTripByID(tripID)
+	return trip.Status == constants.DRIVER_SEARCH
+}
+
+func (r *tripRepository) AcceptTripById(tripId string, userId string) error {
+	filter := bson.M{"_id": tripId}
+	update := bson.M{"$set": bson.M{"status": constants.DRIVER_FOUND, "driver_id": userId}}
+
+	_, err := r.collection.UpdateOne(context.Background(), filter, update)
+	return err
+}
+
+func (r *tripRepository) CheckHaveTripByUser(tripID string, userID string) (bool, error) {
+	filter := bson.M{"_id": tripID, "driver_id": userID}
+
+	count, err := r.collection.CountDocuments(context.Background(), filter)
+	if err != nil {
+		return false, err
+	}
+
+	return count > 0, nil
 }

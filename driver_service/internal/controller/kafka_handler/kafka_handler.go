@@ -5,6 +5,7 @@ import (
 	"driver_service/internal/constants"
 	"driver_service/internal/model"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -15,6 +16,13 @@ import (
 )
 
 type KafkaProducer struct {
+	// indexes writers and topics for send in producer
+	// 0 - driver_search
+	// 1 - driver found
+	// 2 - on position
+	// 3 - started
+	// 4 - ended
+	// 5 - canceled
 	writer *kafka.Writer
 }
 
@@ -25,9 +33,10 @@ type KafkaConsumer struct {
 
 var async = flag.Bool("a", false, "use async")
 
-func NewKafkaProducer(brokers []string, topic string) *KafkaProducer {
+func NewKafkaProducer(brokers []string, topic string) *kafka.Writer {
 	logger := log.Default()
 	//[]string{"127.0.0.1:29092"},
+
 	writer := kafka.NewWriter(kafka.WriterConfig{
 		Brokers:     brokers,
 		Topic:       topic,
@@ -41,9 +50,7 @@ func NewKafkaProducer(brokers []string, topic string) *KafkaProducer {
 		// Balancer: &SimpleBalancer{},
 	})
 
-	return &KafkaProducer{
-		writer: writer,
-	}
+	return writer
 }
 
 func NewKafkaConsumer(brokers []string, topic string, db *mongo.Database) *KafkaConsumer {
@@ -59,7 +66,7 @@ func NewKafkaConsumer(brokers []string, topic string, db *mongo.Database) *Kafka
 func (k *KafkaConsumer) Consume() {
 	reader := kafka.NewReader(kafka.ReaderConfig{
 		Brokers:        []string{"127.0.0.1:29092"},
-		Topic:          "DRIVER_SEARCH",
+		Topic:          constants.DRIVER_SEARCH,
 		GroupID:        "my-group",
 		SessionTimeout: time.Second * 6,
 	})
@@ -72,7 +79,7 @@ func (k *KafkaConsumer) Consume() {
 			continue
 		}
 		fmt.Println(msg.Value)
-		var trip model.KafkaMessage
+		var trip model.KafkaMessageToDriver
 		err = json.Unmarshal(msg.Value, &trip)
 		if err != nil {
 			fmt.Println("Error unmarshalling trip:", err)
@@ -103,8 +110,12 @@ func (k *KafkaConsumer) writeToMongo(trip model.Trip) error {
 	return err
 }
 
-func (k *KafkaProducer) SendMessage(body []byte) error {
+func SendMessage(writer *kafka.Writer, body []byte, key string) error {
 	ctx := context.Background()
-	errSend := k.writer.WriteMessages(ctx, kafka.Message{Key: []byte(k.writer.Topic), Value: body})
+	if writer == nil {
+		return errors.New("kafka writer is nil")
+	}
+
+	errSend := writer.WriteMessages(ctx, kafka.Message{Key: []byte(key), Value: body})
 	return errSend
 }

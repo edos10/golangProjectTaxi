@@ -36,7 +36,7 @@ type AppServer struct {
 	cfg           *config.Config
 	server        *http.Server
 	kafkaConsumer *kafka_handler.KafkaConsumer
-	kafkaProducer *kafka_handler.KafkaProducer
+	kafkaProducer *kafka.Writer
 }
 
 func NewAppServer(cfg *config.Config) *AppServer {
@@ -45,26 +45,26 @@ func NewAppServer(cfg *config.Config) *AppServer {
 	mongo_new := repository.NewTripRepository()
 
 	kafkaConsumer := kafka_handler.NewKafkaConsumer([]string{"127.0.0.1:29092"}, constants.DRIVER_SEARCH, mongo_new.Database)
-	// kafkaProducer := kafka_handler.NewKafkaProducer([]string{"127.0.0.1:8090"}, "accepted-trips")
+	kafkaProducer := kafka_handler.NewKafkaProducer([]string{"127.0.0.1:29092", "127.0.0.1:39092", "127.0.0.1:49092"}, "FROM_DRIVER")
 
 	a := &AppServer{
 		cfg: cfg,
 		server: &http.Server{
 			Addr:    address,
-			Handler: initApi(cfg),
+			Handler: initApi(cfg, kafkaProducer),
 		},
 		kafkaConsumer: kafkaConsumer,
-		//kafkaProducer: kafkaProducer,
+		kafkaProducer: kafkaProducer,
 	}
 
 	return a
 }
 
-func initApi(cfg *config.Config) http.Handler {
+func initApi(cfg *config.Config, writer *kafka.Writer) http.Handler {
 	repo := repository.NewTripRepository()
 	r := mux.NewRouter()
 	uc := usecase.NewTripUsecase(repo)
-	srvHandlers := http_handler.NewHttpHandler(uc)
+	srvHandlers := http_handler.NewHttpHandler(uc, writer)
 	r.HandleFunc("/trips/{trip_id}/cancel", srvHandlers.CancelTrip)
 	r.HandleFunc("/trips/{trip_id}/accept", srvHandlers.AcceptTrip)
 	r.HandleFunc("/trips/{trip_id}/start", srvHandlers.StartTrip)
@@ -84,7 +84,7 @@ func InitKafkaTopic(topic_name string, port string) {
 
 	ctx := context.Background()
 
-	conn, err := kafka.DialContext(ctx, "tcp", "127.0.0.1:9092")
+	conn, err := kafka.DialContext(ctx, "tcp", fmt.Sprintf("127.0.0.1:%s", port))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -124,7 +124,7 @@ func InitKafkaTopic(topic_name string, port string) {
 
 func (a *AppServer) Run() {
 	go func() {
-		//InitKafkaTopic(constants.DRIVER_SEARCH, constants.PORT_TOPIC_DRIVER)
+		InitKafkaTopic("FROM_DRIVER", constants.PORT_TOPIC_DRIVER)
 		a.kafkaConsumer.Consume()
 	}()
 

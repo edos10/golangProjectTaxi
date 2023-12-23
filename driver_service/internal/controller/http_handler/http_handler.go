@@ -6,22 +6,22 @@ import (
 	"driver_service/internal/model"
 	"driver_service/internal/usecase"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/segmentio/kafka-go"
 )
 
 type HttpHandler struct {
 	tripUsecase   usecase.TripUsecase
-	kafkaProducer *kafka_handler.KafkaProducer
-	kafkaConsumer *kafka_handler.KafkaConsumer
+	kafkaProducer *kafka.Writer
 }
 
-func NewHttpHandler(tripUsecase usecase.TripUsecase) *HttpHandler {
+func NewHttpHandler(tripUsecase usecase.TripUsecase, writer *kafka.Writer) *HttpHandler {
 	return &HttpHandler{
-		tripUsecase: tripUsecase,
+		tripUsecase:   tripUsecase,
+		kafkaProducer: writer,
 	}
 }
 
@@ -31,7 +31,6 @@ func (h *HttpHandler) GetTrips(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Driver ID not found in the request header", http.StatusUnauthorized)
 		return
 	}
-	fmt.Println("before first")
 
 	_, err := h.tripUsecase.GetTrips()
 	if err != nil {
@@ -39,14 +38,11 @@ func (h *HttpHandler) GetTrips(w http.ResponseWriter, r *http.Request) {
 
 		return
 	}
-	fmt.Println("after first")
 
 	trips := make([]model.Trip, 0)
 	for i := 0; i < 7; i++ {
-		fmt.Println("before cycle")
 		res, _ := h.tripUsecase.GetTripsByStatus(constants.DRIVER_SEARCH)
 		trips = append(trips, res...)
-		fmt.Println(i)
 		time.Sleep(1 * time.Second)
 	}
 
@@ -58,12 +54,26 @@ func (h *HttpHandler) GetTrips(w http.ResponseWriter, r *http.Request) {
 func (h *HttpHandler) GetTripByID(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	tripID := vars["trip_id"]
+	userID := r.Header.Get("user_id")
+
 	if tripID == "" {
 		http.Error(w, "trip_id is required", http.StatusBadRequest)
 		return
 	}
-	fmt.Println(tripID)
+
+	isHave, err := h.tripUsecase.CheckHaveTripByUser(tripID, userID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if !isHave {
+		http.Error(w, "this user haven't got a this trip", http.StatusBadRequest)
+		return
+	}
+
 	trip, err := h.tripUsecase.GetTripByID(tripID)
+
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -78,12 +88,18 @@ func (h *HttpHandler) AcceptTrip(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	tripID := vars["trip_id"]
 	userID := r.Header.Get("user_id")
-
-	fmt.Println(tripID, userID)
 	_, errGet := h.tripUsecase.GetTripByID(tripID)
 
 	if errGet != nil {
 		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte("This trip doesn't exists"))
+		return
+	}
+
+	isFree := h.tripUsecase.CheckFreeTrip(tripID)
+	if !isFree {
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte("This trip already taken by other driver!"))
 		return
 	}
 
@@ -94,13 +110,13 @@ func (h *HttpHandler) AcceptTrip(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	message := model.KafkaMessage{
+	message := model.KafkaMessageToTrip{
 		ID:              tripID,
 		Source:          "/driver",
 		Type:            "trip.command.accept",
 		DataContentType: "application/json",
 		Time:            time.Now().Format(time.RFC822),
-		Data: model.Trip{
+		Data: model.SendTripData{
 			ID:       tripID,
 			DriverID: userID,
 		},
@@ -113,7 +129,7 @@ func (h *HttpHandler) AcceptTrip(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err = h.kafkaProducer.SendMessage(messageBytes)
+	err = kafka_handler.SendMessage(h.kafkaProducer, messageBytes, "ACCEPTED")
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		w.Write([]byte("Error sending accepted trip message to Kafka: " + err.Error()))
@@ -125,20 +141,187 @@ func (h *HttpHandler) AcceptTrip(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *HttpHandler) StartTrip(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	tripID := vars["trip_id"]
+	userID := r.Header.Get("user_id")
 
+	if tripID == "" {
+		http.Error(w, "trip_id is required", http.StatusBadRequest)
+		return
+	}
+
+	isHave, err := h.tripUsecase.CheckHaveTripByUser(tripID, userID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if !isHave {
+		http.Error(w, "this user hasn't got this trip", http.StatusBadRequest)
+		return
+	}
+
+	trip, err := h.tripUsecase.GetTripByID(tripID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	err = h.tripUsecase.StartTrip(tripID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	message := model.KafkaMessageToTrip{
+		ID:              tripID,
+		Source:          "/driver",
+		Type:            "trip.command.start",
+		DataContentType: "application/json",
+		Time:            time.Now().Format(time.RFC822),
+		Data: model.SendTripData{
+			ID:       tripID,
+			DriverID: userID,
+		},
+	}
+
+	messageBytes, err := json.Marshal(message)
+	if err != nil {
+		http.Error(w, "Error marshaling started trip message: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	err = kafka_handler.SendMessage(h.kafkaProducer, messageBytes, "STARTED")
+	if err != nil {
+		http.Error(w, "Error sending started trip message to Kafka: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("Trip started successfully"))
 }
 
 func (h *HttpHandler) EndTrip(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	tripID := vars["trip_id"]
+	userID := r.Header.Get("user_id")
 
+	if tripID == "" {
+		http.Error(w, "trip_id is required", http.StatusBadRequest)
+		return
+	}
+
+	isHave, err := h.tripUsecase.CheckHaveTripByUser(tripID, userID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if !isHave {
+		http.Error(w, "this user hasn't got this trip", http.StatusBadRequest)
+		return
+	}
+
+	trip, err := h.tripUsecase.GetTripByID(tripID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	err = h.tripUsecase.EndTrip(tripID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	message := model.KafkaMessageToTrip{
+		ID:              tripID,
+		Source:          "/driver",
+		Type:            "trip.command.end",
+		DataContentType: "application/json",
+		Time:            time.Now().Format(time.RFC822),
+		Data: model.SendTripData{
+			ID:       tripID,
+			DriverID: userID,
+		},
+	}
+
+	messageBytes, err := json.Marshal(message)
+	if err != nil {
+		http.Error(w, "Error marshaling started trip message: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	err = kafka_handler.SendMessage(h.kafkaProducer, messageBytes, "ENDED")
+	if err != nil {
+		http.Error(w, "Error sending started trip message to Kafka: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("Trip ended successfully"))
 }
 
 func (h *HttpHandler) CancelTrip(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	tripID := vars["trip_id"]
+	userID := r.Header.Get("user_id")
 
+	if tripID == "" {
+		http.Error(w, "trip_id is required", http.StatusBadRequest)
+		return
+	}
+
+	isHave, err := h.tripUsecase.CheckHaveTripByUser(tripID, userID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if !isHave {
+		http.Error(w, "this user hasn't got this trip", http.StatusBadRequest)
+		return
+	}
+
+	trip, err := h.tripUsecase.GetTripByID(tripID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	err = h.tripUsecase.StartTrip(tripID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	message := model.KafkaMessageToTrip{
+		ID:              tripID,
+		Source:          "/driver",
+		Type:            "trip.command.cancel",
+		DataContentType: "application/json",
+		Time:            time.Now().Format(time.RFC822),
+		Data: model.SendTripData{
+			ID:       tripID,
+			DriverID: userID,
+		},
+	}
+
+	messageBytes, err := json.Marshal(message)
+	if err != nil {
+		http.Error(w, "Error marshaling started trip message: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	err = kafka_handler.SendMessage(h.kafkaProducer, messageBytes, "CANCELED")
+	if err != nil {
+		http.Error(w, "Error sending started trip message to Kafka: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("Trip canceled successfully"))
 }
 
-func getLocationDrivers(driverID string) ([]model.Driver, error) {
-	return []model.Driver{
-		{ID: "1", Name: "Driver 1", Latitude: 40.7128, Longitude: -74.0060},
-		{ID: "2", Name: "Driver 2", Latitude: 34.0522, Longitude: -118.2437},
-	}, nil
-}
+// to fix locate in other package
+// fixed

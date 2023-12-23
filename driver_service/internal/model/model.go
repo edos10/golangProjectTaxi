@@ -3,6 +3,7 @@ package model
 type Trip struct {
 	ID       string        `json:"id" bson:"_id,omitempty"`
 	DriverID string        `json:"driver_id" bson:"driver_id"`
+	OfferID  string        `json:"offer_id" bson:"offer_id"`
 	From     LatLngLiteral `json:"from" bson:"from"`
 	To       LatLngLiteral `json:"to" bson:"to"`
 	Price    Money         `json:"price" bson:"price"`
@@ -30,11 +31,25 @@ type TripMessage struct {
 	TripId string `json:"trip_id"`
 }
 
-type KafkaMessage struct {
+type KafkaMessageToDriver struct {
 	ID              string `json:"id"`
 	Source          string `json:"source"`
 	Type            string `json:"type"`
 	DataContentType string `json:"datacontenttype"`
 	Time            string `json:"time"`
 	Data            Trip   `json:"data"`
+}
+
+type SendTripData struct {
+	ID       string `json:"trip_id" bson:"_id,omitempty"`
+	DriverID string `json:"driver_id" bson:"driver_id"`
+}
+
+type KafkaMessageToTrip struct {
+	ID              string       `json:"id"`
+	Source          string       `json:"source"`
+	Type            string       `json:"type"`
+	DataContentType string       `json:"datacontenttype"`
+	Time            string       `json:"time"`
+	Data            AcceptedTrip `json:"data"`
 }
