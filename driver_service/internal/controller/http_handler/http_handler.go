@@ -12,31 +12,35 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/segmentio/kafka-go"
+	"go.uber.org/zap"
 )
 
 type HttpHandler struct {
 	tripUsecase   usecase.TripUsecase
 	kafkaProducer *kafka.Writer
+	logger        *zap.Logger
 }
 
-func NewHttpHandler(tripUsecase usecase.TripUsecase, writer *kafka.Writer) *HttpHandler {
+func NewHttpHandler(tripUsecase usecase.TripUsecase, writer *kafka.Writer, logger *zap.Logger) *HttpHandler {
 	return &HttpHandler{
 		tripUsecase:   tripUsecase,
 		kafkaProducer: writer,
+		logger:        logger,
 	}
 }
 
 func (h *HttpHandler) GetTrips(w http.ResponseWriter, r *http.Request) {
 	driverID := r.Header.Get("user_id")
 	if driverID == "" {
+		h.logger.Error("Driver ID not found in the request header", zap.String("error_type", "DriverIDNotFound"))
 		http.Error(w, "Driver ID not found in the request header", http.StatusUnauthorized)
 		return
 	}
 
 	_, err := h.tripUsecase.GetTrips()
 	if err != nil {
+		h.logger.Error("Error getting trips", zap.Error(err))
 		http.Error(w, err.Error(), http.StatusInternalServerError)
-
 		return
 	}
 
@@ -56,6 +60,7 @@ func (h *HttpHandler) GetTrips(w http.ResponseWriter, r *http.Request) {
 		lat, lng, radius := trips[i].From.Lat, trips[i].From.Lng, constants.RADIUS
 		drivers, err := location.GetLocationDrivers(lat, lng, radius)
 		if err != nil {
+			h.logger.Error("Error getting location drivers", zap.Error(err))
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -85,8 +90,12 @@ func (h *HttpHandler) GetTrips(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(tripsAvailableForDriver)
-
+	if err := json.NewEncoder(w).Encode(tripsAvailableForDriver); err != nil {
+		h.logger.Error("Error encoding JSON response", zap.Error(err))
+		http.Error(w, "Error encoding JSON response", http.StatusInternalServerError)
+		return
+	}
+	h.logger.Info("GetTrips request processed successfully", zap.Int("trips_count", len(tripsAvailableForDriver)))
 }
 
 func (h *HttpHandler) GetTripByID(w http.ResponseWriter, r *http.Request) {
@@ -95,17 +104,20 @@ func (h *HttpHandler) GetTripByID(w http.ResponseWriter, r *http.Request) {
 	userID := r.Header.Get("user_id")
 
 	if tripID == "" {
+		h.logger.Error("trip_id is required", zap.String("user_id", userID))
 		http.Error(w, "trip_id is required", http.StatusBadRequest)
 		return
 	}
 
 	isHave, err := h.tripUsecase.CheckHaveTripByUser(tripID, userID)
 	if err != nil {
+		h.logger.Error("Error checking if the user has the trip", zap.Error(err), zap.String("user_id", userID), zap.String("trip_id", tripID))
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	if !isHave {
+		h.logger.Error("This user hasn't got this trip", zap.String("user_id", userID), zap.String("trip_id", tripID))
 		http.Error(w, "this user haven't got a this trip", http.StatusBadRequest)
 		return
 	}
@@ -113,12 +125,18 @@ func (h *HttpHandler) GetTripByID(w http.ResponseWriter, r *http.Request) {
 	trip, err := h.tripUsecase.GetTripByID(tripID)
 
 	if err != nil {
+		h.logger.Error("Error getting trip by ID", zap.Error(err), zap.String("user_id", userID), zap.String("trip_id", tripID))
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(trip)
+	if err := json.NewEncoder(w).Encode(trip); err != nil {
+		h.logger.Error("Error encoding JSON response", zap.Error(err), zap.String("user_id", userID), zap.String("trip_id", tripID))
+		http.Error(w, "Error encoding JSON response", http.StatusInternalServerError)
+		return
+	}
+	h.logger.Info("GetTripByID request processed successfully", zap.String("user_id", userID), zap.String("trip_id", tripID))
 }
 
 func (h *HttpHandler) AcceptTrip(w http.ResponseWriter, r *http.Request) {
@@ -184,6 +202,7 @@ func (h *HttpHandler) StartTrip(w http.ResponseWriter, r *http.Request) {
 	userID := r.Header.Get("user_id")
 
 	if tripID == "" {
+		h.logger.Error("trip_id is required", zap.String("user_id", userID))
 		http.Error(w, "trip_id is required", http.StatusBadRequest)
 		return
 	}
@@ -191,6 +210,7 @@ func (h *HttpHandler) StartTrip(w http.ResponseWriter, r *http.Request) {
 	_, errGet := h.tripUsecase.GetTripByID(tripID)
 
 	if errGet != nil {
+		h.logger.Error("Error getting trip by ID", zap.Error(errGet), zap.String("user_id", userID), zap.String("trip_id", tripID))
 		w.WriteHeader(http.StatusNotFound)
 		w.Write([]byte("This trip doesn't exists"))
 		return
@@ -198,17 +218,20 @@ func (h *HttpHandler) StartTrip(w http.ResponseWriter, r *http.Request) {
 
 	isHave, err := h.tripUsecase.CheckHaveTripByUser(tripID, userID)
 	if err != nil {
+		h.logger.Error("Error checking if the user has the trip", zap.Error(err), zap.String("user_id", userID), zap.String("trip_id", tripID))
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	if !isHave {
+		h.logger.Error("This user hasn't got this trip", zap.String("user_id", userID), zap.String("trip_id", tripID))
 		http.Error(w, "this user hasn't got this trip", http.StatusBadRequest)
 		return
 	}
 
 	err = h.tripUsecase.StartTrip(tripID)
 	if err != nil {
+		h.logger.Error("Error starting trip", zap.Error(err), zap.String("user_id", userID), zap.String("trip_id", tripID))
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -227,16 +250,19 @@ func (h *HttpHandler) StartTrip(w http.ResponseWriter, r *http.Request) {
 
 	messageBytes, err := json.Marshal(message)
 	if err != nil {
+		h.logger.Error("Error marshaling started trip message", zap.Error(err), zap.String("user_id", userID), zap.String("trip_id", tripID))
 		http.Error(w, "Error marshaling started trip message: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	err = kafka_handler.SendMessage(h.kafkaProducer, messageBytes, "STARTED")
 	if err != nil {
+		h.logger.Error("Error sending started trip message to Kafka", zap.Error(err), zap.String("user_id", userID), zap.String("trip_id", tripID))
 		http.Error(w, "Error sending started trip message to Kafka: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
+	h.logger.Info("Trip started successfully", zap.String("user_id", userID), zap.String("trip_id", tripID))
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("Trip started successfully"))
 }
@@ -247,13 +273,15 @@ func (h *HttpHandler) EndTrip(w http.ResponseWriter, r *http.Request) {
 	userID := r.Header.Get("user_id")
 
 	if tripID == "" {
+		h.logger.Error("trip_id is required", zap.String("user_id", userID))
 		http.Error(w, "trip_id is required", http.StatusBadRequest)
 		return
 	}
 
-	_, errGet := h.tripUsecase.GetTripByID(tripID)
+	trip, errGet := h.tripUsecase.GetTripByID(tripID)
 
 	if errGet != nil {
+		h.logger.Error("Error getting trip by ID", zap.Error(errGet), zap.String("user_id", userID), zap.String("trip_id", tripID))
 		w.WriteHeader(http.StatusNotFound)
 		w.Write([]byte("This trip doesn't exists"))
 		return
@@ -261,17 +289,26 @@ func (h *HttpHandler) EndTrip(w http.ResponseWriter, r *http.Request) {
 
 	isHave, err := h.tripUsecase.CheckHaveTripByUser(tripID, userID)
 	if err != nil {
+		h.logger.Error("Error checking if the user has the trip", zap.Error(err), zap.String("user_id", userID), zap.String("trip_id", tripID))
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	if !isHave {
+		h.logger.Error("This user hasn't got this trip", zap.String("user_id", userID), zap.String("trip_id", tripID))
 		http.Error(w, "this user hasn't got this trip", http.StatusBadRequest)
+		return
+	}
+
+	if trip.Status != constants.STARTED {
+		h.logger.Error("Cannot end trip that is not in STARTED state", zap.String("user_id", userID), zap.String("trip_id", tripID))
+		http.Error(w, "Cannot end trip that is not in STARTED state", http.StatusBadRequest)
 		return
 	}
 
 	err = h.tripUsecase.EndTrip(tripID)
 	if err != nil {
+		h.logger.Error("Error ending trip", zap.Error(err), zap.String("user_id", userID), zap.String("trip_id", tripID))
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -290,16 +327,19 @@ func (h *HttpHandler) EndTrip(w http.ResponseWriter, r *http.Request) {
 
 	messageBytes, err := json.Marshal(message)
 	if err != nil {
-		http.Error(w, "Error marshaling started trip message: "+err.Error(), http.StatusInternalServerError)
+		h.logger.Error("Error marshaling ended trip message", zap.Error(err), zap.String("user_id", userID), zap.String("trip_id", tripID))
+		http.Error(w, "Error marshaling ended trip message: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	err = kafka_handler.SendMessage(h.kafkaProducer, messageBytes, "ENDED")
 	if err != nil {
-		http.Error(w, "Error sending started trip message to Kafka: "+err.Error(), http.StatusInternalServerError)
+		h.logger.Error("Error sending ended trip message to Kafka", zap.Error(err), zap.String("user_id", userID), zap.String("trip_id", tripID))
+		http.Error(w, "Error sending ended trip message to Kafka: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
+	h.logger.Info("Trip ended successfully", zap.String("user_id", userID), zap.String("trip_id", tripID))
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("Trip ended successfully"))
 }
@@ -310,13 +350,15 @@ func (h *HttpHandler) CancelTrip(w http.ResponseWriter, r *http.Request) {
 	userID := r.Header.Get("user_id")
 
 	if tripID == "" {
+		h.logger.Error("trip_id is required", zap.String("user_id", userID))
 		http.Error(w, "trip_id is required", http.StatusBadRequest)
 		return
 	}
 
-	_, errGet := h.tripUsecase.GetTripByID(tripID)
+	trip, errGet := h.tripUsecase.GetTripByID(tripID)
 
 	if errGet != nil {
+		h.logger.Error("Error getting trip by ID", zap.Error(errGet), zap.String("user_id", userID), zap.String("trip_id", tripID))
 		w.WriteHeader(http.StatusNotFound)
 		w.Write([]byte("This trip doesn't exists"))
 		return
@@ -324,17 +366,26 @@ func (h *HttpHandler) CancelTrip(w http.ResponseWriter, r *http.Request) {
 
 	isHave, err := h.tripUsecase.CheckHaveTripByUser(tripID, userID)
 	if err != nil {
+		h.logger.Error("Error checking if the user has the trip", zap.Error(err), zap.String("user_id", userID), zap.String("trip_id", tripID))
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	if !isHave {
+		h.logger.Error("This user hasn't got this trip", zap.String("user_id", userID), zap.String("trip_id", tripID))
 		http.Error(w, "this user hasn't got this trip", http.StatusBadRequest)
 		return
 	}
 
-	err = h.tripUsecase.StartTrip(tripID)
+	if trip.Status != constants.STARTED {
+		h.logger.Error("Cannot cancel trip that is not in STARTED state", zap.String("user_id", userID), zap.String("trip_id", tripID))
+		http.Error(w, "Cannot cancel trip that is not in STARTED state", http.StatusBadRequest)
+		return
+	}
+
+	err = h.tripUsecase.CancelTrip(tripID)
 	if err != nil {
+		h.logger.Error("Error canceling trip", zap.Error(err), zap.String("user_id", userID), zap.String("trip_id", tripID))
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -353,16 +404,19 @@ func (h *HttpHandler) CancelTrip(w http.ResponseWriter, r *http.Request) {
 
 	messageBytes, err := json.Marshal(message)
 	if err != nil {
+		h.logger.Error("Error marshaling cancel trip message", zap.Error(err), zap.String("user_id", userID), zap.String("trip_id", tripID))
 		http.Error(w, "Error marshaling started trip message: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	err = kafka_handler.SendMessage(h.kafkaProducer, messageBytes, "CANCELED")
 	if err != nil {
+		h.logger.Error("Error sending cancel trip message to Kafka", zap.Error(err), zap.String("user_id", userID), zap.String("trip_id", tripID))
 		http.Error(w, "Error sending started trip message to Kafka: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
+	h.logger.Info("Trip canceled successfully", zap.String("user_id", userID), zap.String("trip_id", tripID))
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("Trip canceled successfully"))
 }

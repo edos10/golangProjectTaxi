@@ -13,7 +13,12 @@ import (
 	"driver_service/internal/config"
 
 	"github.com/joho/godotenv"
+	"go.uber.org/zap"
 )
+
+func initLogger() (*zap.Logger, error) {
+	return zap.NewProduction()
+}
 
 func main() {
 
@@ -29,7 +34,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	a := app.NewAppServer(cfg)
+	serviceLogger, err := initLogger()
+	if err != nil {
+		fmt.Println("error init logger")
+		os.Exit(1)
+	}
+
+	a := app.NewAppServer(cfg, serviceLogger)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -40,7 +51,6 @@ func main() {
 		if v != nil {
 			ctx, _ := context.WithTimeout(ctx, 3*time.Second)
 			a.Stop(ctx)
-			fmt.Println(v)
 			os.Exit(1)
 		}
 	}()
