@@ -2,15 +2,16 @@ package location
 
 import (
 	"bytes"
+	"driver_service/internal/model"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"net/http"
 )
 
-func getLocationDrivers(lat, lng, radius float64) ([]model.Driver, error) {
+func GetLocationDrivers(lat, lng, radius float32) ([]model.Driver, error) {
 	url := fmt.Sprintf("http://%s/drivers", "localhost:8081")
-	reqBody := map[string]float64{"lat": lat, "lng": lng, "radius": radius}
+	reqBody := map[string]float32{"lat": lat, "lng": lng, "radius": radius}
 	reqBytes, err := json.Marshal(reqBody)
 	if err != nil {
 		return nil, err

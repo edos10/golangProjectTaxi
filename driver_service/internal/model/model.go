@@ -11,8 +11,8 @@ type Trip struct {
 }
 
 type LatLngLiteral struct {
-	Lat float64 `json:"lat" bson:"lat"`
-	Lng float64 `json:"lng" bson:"lng"`
+	Lat float32 `json:"lat" bson:"lat"`
+	Lng float32 `json:"lng" bson:"lng"`
 }
 
 type Money struct {
@@ -21,10 +21,10 @@ type Money struct {
 }
 
 type Driver struct {
-	ID        string  `json:"id"`
-	Name      string  `json:"name"`
-	Latitude  float64 `json:"latitude"`
-	Longitude float64 `json:"longitude"`
+	ID   string  `json:"id"`
+	Name string  `json:"name"`
+	Lat  float32 `json:"lat"`
+	Lng  float32 `json:"lng"`
 }
 
 type TripMessage struct {
@@ -51,5 +51,5 @@ type KafkaMessageToTrip struct {
 	Type            string       `json:"type"`
 	DataContentType string       `json:"datacontenttype"`
 	Time            string       `json:"time"`
-	Data            AcceptedTrip `json:"data"`
+	Data            SendTripData `json:"data"`
 }

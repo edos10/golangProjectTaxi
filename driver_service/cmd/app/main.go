@@ -11,9 +11,14 @@ import (
 
 	"driver_service/internal/app"
 	"driver_service/internal/config"
+
+	"github.com/joho/godotenv"
 )
 
 func main() {
+
+	_ = godotenv.Load("/internal/config/settings.env.dev")
+
 	var cfgPath string
 	flag.StringVar(&cfgPath, "config", "/internal/config.yaml", "set config path")
 	flag.Parse()

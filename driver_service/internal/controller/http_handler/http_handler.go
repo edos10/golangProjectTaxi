@@ -3,6 +3,7 @@ package http_handler
 import (
 	"driver_service/internal/constants"
 	"driver_service/internal/controller/kafka_handler"
+	"driver_service/internal/location"
 	"driver_service/internal/model"
 	"driver_service/internal/usecase"
 	"encoding/json"
@@ -40,14 +41,51 @@ func (h *HttpHandler) GetTrips(w http.ResponseWriter, r *http.Request) {
 	}
 
 	trips := make([]model.Trip, 0)
+
 	for i := 0; i < 7; i++ {
 		res, _ := h.tripUsecase.GetTripsByStatus(constants.DRIVER_SEARCH)
+
 		trips = append(trips, res...)
 		time.Sleep(1 * time.Second)
 	}
 
+	tripsAvailableForDriver := make([]model.Trip, 0)
+
+	for i := 0; i < len(trips); i++ {
+		// получим список всех водителей по параметрам поездки
+		lat, lng, radius := trips[i].From.Lat, trips[i].From.Lng, constants.RADIUS
+		drivers, err := location.GetLocationDrivers(lat, lng, radius)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		// смотрим, можно ли отправить поездку данному водителю как ту, которую он может взять
+
+		// здесь можно такие поездки, взятые водителем уже или законченные, просто отдавать в другом роуте
+		// или как вариант модификации, отдавать просто все поездки, а на фронте бить их на 2 вида статусов: DRIVER_SEARCH(то есть предлагаемые водителю) и законченные
+		// я пока сделаю так, чтобы были только предлагаемые
+
+		if trips[i].Status != constants.DRIVER_SEARCH {
+			continue
+		}
+
+		checkDriverAvailable := false
+		for j := 0; j < len(drivers); j++ {
+			// этому водителю подходит эта поездка по радиусу и она в статусе поиска водителя
+			if drivers[j].ID == driverID {
+				checkDriverAvailable = true
+				break
+			}
+		}
+		if checkDriverAvailable {
+			tripsAvailableForDriver = append(tripsAvailableForDriver, trips[i])
+		}
+
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(trips)
+	json.NewEncoder(w).Encode(tripsAvailableForDriver)
 
 }
 
@@ -150,6 +188,14 @@ func (h *HttpHandler) StartTrip(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	_, errGet := h.tripUsecase.GetTripByID(tripID)
+
+	if errGet != nil {
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte("This trip doesn't exists"))
+		return
+	}
+
 	isHave, err := h.tripUsecase.CheckHaveTripByUser(tripID, userID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -158,12 +204,6 @@ func (h *HttpHandler) StartTrip(w http.ResponseWriter, r *http.Request) {
 
 	if !isHave {
 		http.Error(w, "this user hasn't got this trip", http.StatusBadRequest)
-		return
-	}
-
-	trip, err := h.tripUsecase.GetTripByID(tripID)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
@@ -211,6 +251,14 @@ func (h *HttpHandler) EndTrip(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	_, errGet := h.tripUsecase.GetTripByID(tripID)
+
+	if errGet != nil {
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte("This trip doesn't exists"))
+		return
+	}
+
 	isHave, err := h.tripUsecase.CheckHaveTripByUser(tripID, userID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -219,12 +267,6 @@ func (h *HttpHandler) EndTrip(w http.ResponseWriter, r *http.Request) {
 
 	if !isHave {
 		http.Error(w, "this user hasn't got this trip", http.StatusBadRequest)
-		return
-	}
-
-	trip, err := h.tripUsecase.GetTripByID(tripID)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
@@ -272,6 +314,14 @@ func (h *HttpHandler) CancelTrip(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	_, errGet := h.tripUsecase.GetTripByID(tripID)
+
+	if errGet != nil {
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte("This trip doesn't exists"))
+		return
+	}
+
 	isHave, err := h.tripUsecase.CheckHaveTripByUser(tripID, userID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -280,12 +330,6 @@ func (h *HttpHandler) CancelTrip(w http.ResponseWriter, r *http.Request) {
 
 	if !isHave {
 		http.Error(w, "this user hasn't got this trip", http.StatusBadRequest)
-		return
-	}
-
-	trip, err := h.tripUsecase.GetTripByID(tripID)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
